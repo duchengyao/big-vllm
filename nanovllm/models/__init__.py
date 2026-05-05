@@ -2,8 +2,8 @@ from transformers import AutoConfig
 
 from nanovllm.models.qwen2 import Qwen2ForCausalLM
 from nanovllm.models.qwen3 import Qwen3ForCausalLM
-from nanovllm.models.qwen3_5 import Qwen35ForCausalLM
-from nanovllm.models.qwen3_5_hfwrap import Qwen35ForCausalLM as Qwen35HFForCausalLM
+from nanovllm.models.qwen35 import Qwen35ForCausalLM
+from nanovllm.models.qwen35_hfwrap import Qwen35ForCausalLM as Qwen35HFForCausalLM
 
 
 SUPPORTED_MODEL_CLS = {
