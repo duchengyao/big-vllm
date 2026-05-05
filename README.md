@@ -1,68 +1,76 @@
-<p align="center">
-<img width="300" src="assets/logo.png">
-</p>
+# Big-vLLM
 
-<p align="center">
-<a href="https://trendshift.io/repositories/15323" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15323" alt="GeeeekExplorer%2Fnano-vllm | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
+A high-performance LLM inference engine forked from [nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm), with native support for hybrid-attention models like Qwen3.5.
 
-# Nano-vLLM
-
-A lightweight vLLM implementation built from scratch.
-
-Supported model families: `Qwen2` (including `Qwen2.5`) and `Qwen3`.
+Supported model families: `Qwen2` (including `Qwen2.5`), `Qwen3`, and `Qwen3.5`.
 
 ## Key Features
 
-* 🚀 **Fast offline inference** - Comparable inference speeds to vLLM
-* 📖 **Readable codebase** - Clean implementation in ~ 1,200 lines of Python code
-* ⚡ **Optimization Suite** - Prefix caching, Tensor Parallelism, Torch compilation, CUDA graph, etc.
+- **Fast offline inference** — Competitive with vLLM across Qwen3 and Qwen3.5
+- **Native hybrid-attention** — Hand-written GatedDeltaNet for Qwen3.5, no HuggingFace model dependency
+- **CUDA graph** — Zero-overhead kernel replay for decode
+- **Paged KV cache** — Efficient memory management with prefix caching
+- **Readable codebase** — ~1,500 lines of Python
 
 ## Installation
 
 ```bash
-pip install git+https://github.com/GeeeekExplorer/nano-vllm.git
+pip install git+https://github.com/duchengyao/big-vllm.git
 ```
 
 ## Model Download
 
-To download the model weights manually, use the following command:
 ```bash
 huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
   --local-dir ~/huggingface/Qwen3-0.6B/ \
+  --local-dir-use-symlinks False
+
+huggingface-cli download --resume-download Qwen/Qwen3.5-0.8B \
+  --local-dir ~/huggingface/Qwen3.5-0.8B/ \
   --local-dir-use-symlinks False
 ```
 
 ## Quick Start
 
-See `example.py` for usage. The API mirrors vLLM's interface with minor differences in the `LLM.generate` method:
 ```python
 from nanovllm import LLM, SamplingParams
-llm = LLM("/YOUR/MODEL/PATH", enforce_eager=True, tensor_parallel_size=1)
+
+llm = LLM("~/huggingface/Qwen3.5-0.8B", enforce_eager=False, max_model_len=1024)
 sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
-prompts = ["Hello, Nano-vLLM."]
-outputs = llm.generate(prompts, sampling_params)
-outputs[0]["text"]
+outputs = llm.generate(["Hello, my name is"], sampling_params)
+print(outputs[0]["text"])
+```
+
+For Qwen3.5, set `TORCH_COMPILE_DISABLE=1` to avoid PyTorch recompilation overhead with variable-length inputs:
+
+```bash
+TORCH_COMPILE_DISABLE=1 python your_script.py
 ```
 
 ## Benchmark
 
-See `benchmarks/` for benchmarks and `benchmarks/BENCH_RESULTS.md` for detailed results.
+See `benchmarks/run_bench.sh`. Hardware: NVIDIA RTX 3090 (24GB).
 
-**Test Configuration:**
-- Hardware: RTX 4070 Laptop (8GB)
-- Model: Qwen3-0.6B
-- Total Requests: 256 sequences
-- Input Length: Randomly sampled between 100–1024 tokens
-- Output Length: Randomly sampled between 100–1024 tokens
+### Qwen3-0.6B (128 seqs, 100-512 in, 100-512 out)
 
-**Performance Results:**
-| Inference Engine | Output Tokens | Time (s) | Throughput (tokens/s) |
-|----------------|-------------|----------|-----------------------|
-| vLLM           | 133,966     | 98.37    | 1361.84               |
-| Nano-vLLM      | 133,966     | 93.41    | 1434.13               |
+| Engine | Throughput |
+|--------|-----------|
+| big-vLLM | **6,515 tok/s** |
+| vLLM | 6,347 tok/s |
 
+### Qwen3.5-0.8B (8 seqs, 100-200 in, 100-200 out)
 
-## Star History
+| Engine | Throughput |
+|--------|-----------|
+| vLLM | 1,789 tok/s |
+| big-vLLM | 1,018 tok/s |
 
-[![Star History Chart](https://api.star-history.com/svg?repos=GeeeekExplorer/nano-vllm&type=Date)](https://www.star-history.com/#GeeeekExplorer/nano-vllm&Date)
+## Why TORCH_COMPILE_DISABLE?
+
+PyTorch's `torch.compile` (`@torch.compile` decorator) is used on several nano-vLLM kernels (RoPE, RMSNorm, Attention). Under variable batch sizes — especially in Qwen3.5 where prefill can be hundreds of tokens and decode is a single token — the compiler hits `recompile_limit` and recompiles the same functions repeatedly. This adds more overhead than eager execution, causing a net slowdown.
+
+Disabling `torch.compile` avoids this recompilation thrash and results in faster inference for Qwen3.5.
+
+## Acknowledgments
+
+Forked from [nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) by Xingkai Yu. Built with [flash-attn](https://github.com/Dao-AILab/flash-attention), [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d), and [flash-linear-attention](https://github.com/fla-org/flash-linear-attention).
