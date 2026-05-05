@@ -14,7 +14,7 @@ SCENARIOS = {
         "enforce_eager": False,
     },
     "qwen35": {
-        "model": os.path.expanduser("~/huggingface/Qwen3.5-4B"),
+        "model": os.path.expanduser("~/huggingface/Qwen3.5-0.8B"),
         "num_seqs": 8,
         "min_in": 100, "max_in": 200,
         "min_out": 100, "max_out": 200,

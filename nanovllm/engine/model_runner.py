@@ -19,6 +19,8 @@ class ModelRunner:
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
         self.config = config
         hf_config = config.hf_config
+        text_config = getattr(config, "text_config", hf_config)
+        self.text_config = text_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
         self.world_size = config.tensor_parallel_size
@@ -28,7 +30,7 @@ class ModelRunner:
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(hf_config.dtype)
+        torch.set_default_dtype(text_config.dtype)
         torch.set_default_device("cuda")
         model_cls = get_model_cls(hf_config)
         self.model = model_cls(hf_config)
@@ -110,13 +112,14 @@ class ModelRunner:
     def allocate_kv_cache(self):
         config = self.config
         hf_config = config.hf_config
+        text_config = self.text_config
         free, total = torch.cuda.mem_get_info()
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
+        num_kv_heads = text_config.num_key_value_heads // self.world_size
+        head_dim = getattr(text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads)
+        block_bytes = 2 * text_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * text_config.dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
 
         has_kv_module = False
@@ -126,7 +129,7 @@ class ModelRunner:
                 break
 
         if has_kv_module and config.num_kvcache_blocks > 0:
-            self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+            self.kv_cache = torch.empty(2, text_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
             layer_id = 0
             for module in self.model.modules():
                 if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
@@ -245,7 +248,7 @@ class ModelRunner:
             saved = self._save_gdn_state()
             old_device = torch.get_default_device()
             torch.set_default_device('cuda')
-            torch.set_default_dtype(self.config.hf_config.dtype)
+            torch.set_default_dtype(self.text_config.dtype)
             try:
                 self.capture_cudagraph()
                 self._graph_captured = True
@@ -285,7 +288,7 @@ class ModelRunner:
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
-        outputs = torch.zeros(max_bs, hf_config.hidden_size)
+        outputs = torch.zeros(max_bs, self.text_config.hidden_size)
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
         self.graph_pool = None

@@ -5,7 +5,7 @@ import pytest
 import torch
 import torch.distributed as dist
 
-MODEL = os.path.expanduser("~/huggingface/Qwen3.5-4B")
+MODEL = os.path.expanduser("~/huggingface/Qwen3.5-0.8B")
 
 
 @pytest.fixture(scope="module")
