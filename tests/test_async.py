@@ -6,7 +6,7 @@ import pytest
 
 from nanovllm import AsyncLLM, SamplingParams
 
-MODEL = os.path.expanduser("~/huggingface/models/Qwen3-0.6B/")
+MODEL = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
 
 
 @pytest.fixture(scope="module")

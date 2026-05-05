@@ -6,7 +6,7 @@ from random import randint, seed
 
 SCENARIOS = {
     "qwen3": {
-        "model": os.path.expanduser("~/huggingface/models/Qwen3-0.6B/"),
+        "model": os.path.expanduser("~/huggingface/Qwen3-0.6B/"),
         "num_seqs": 128,
         "min_in": 100, "max_in": 512,
         "min_out": 100, "max_out": 512,
@@ -14,7 +14,7 @@ SCENARIOS = {
         "enforce_eager": False,
     },
     "qwen35": {
-        "model": "/data/huggingface/models/Qwen3.5-4B",
+        "model": os.path.expanduser("~/huggingface/Qwen3.5-4B"),
         "num_seqs": 8,
         "min_in": 100, "max_in": 200,
         "min_out": 100, "max_out": 200,
