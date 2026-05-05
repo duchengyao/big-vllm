@@ -11,6 +11,7 @@ Supported model families: `Qwen2` (including `Qwen2.5`), `Qwen3`, and `Qwen3.5`.
 - **Async streaming API** — `AsyncLLM` with `generate()` async generator, supports concurrent requests and abort
 - **CUDA graph** — Zero-overhead kernel replay for decode
 - **Paged KV cache** — Efficient memory management with prefix caching
+- **Quantized models** — Supports FP8 (rtn) and 4-bit W4A16-G128 via `compressed-tensors` format, with automatic dequantization on load
 - **Readable codebase** — ~1,500 lines of Python
 
 ## Installation
@@ -28,6 +29,11 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 
 huggingface-cli download --resume-download Qwen/Qwen3.5-0.8B \
   --local-dir ~/huggingface/Qwen3.5-0.8B/ \
+  --local-dir-use-symlinks False
+
+# Quantized models (W4A16-G128, FP8 rtn)
+huggingface-cli download --resume-download Qwen/Qwen3-8B \
+  --local-dir ~/huggingface/Qwen3-8B-W4A16-G128/ \
   --local-dir-use-symlinks False
 ```
 
@@ -88,6 +94,32 @@ See `benchmarks/run_bench.sh`. Hardware: NVIDIA RTX 3090 (24GB).
 |--------|-----------|
 | vLLM | 1,789 tok/s |
 | big-vLLM | 1,018 tok/s |
+
+### Qwen3-8B (4 seqs, 50-100 in, 50-100 out)
+
+| Model | big-VLLM | vLLM |
+|-------|----------|------|
+| FP16 | 75 tok/s | 77 tok/s |
+| W4A16-G128 | 75 tok/s | 88 tok/s |
+
+W4A16-G128 uses ~5 GB vs ~16 GB for FP16 — 3x memory reduction with negligible quality loss.
+
+## Quantization
+
+big-VLLM supports `compressed-tensors` quantized models with automatic dequantization during weight loading. No special flags needed — just pass the model path:
+
+```python
+llm = LLM("~/huggingface/Qwen3-8B-W4A16-G128", enforce_eager=False)
+```
+
+Supported formats:
+
+| Format | Bit-width | Example | Dequant |
+|--------|-----------|---------|---------|
+| W4A16-G128 | 4-bit weights, group 128 | `weight_packed` + `weight_scale` | `u4 → s4 → scale` |
+| FP8 (rtn) | 8-bit float, block [128,128] | `float8_e4m3fn` + `weight_scale` | `fp8 → scale` |
+
+The dequantization happens in `load_model()` — packed weights are unpacked, scaled, and converted to float16 before copying into model parameters. Output quality is near-identical to FP16 (cos similarity > 0.99). Run `python tests/test_quant.py` to verify.
 
 ## Why TORCH_COMPILE_DISABLE?
 
