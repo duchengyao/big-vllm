@@ -1,92 +1,75 @@
-import os
-import sys
-import time
-import argparse
+"""Unified benchmark: nano-VLLM vs vLLM on Qwen3 / Qwen3.5."""
+
+import argparse, os, sys, time
 from random import randint, seed
 
 
 SCENARIOS = {
-    "long-prefill": dict(
-        desc="多长输入并发 — 测试 chunked prefill 调度效率",
-        num_seqs=64,
-        min_input=3072,
-        max_input=4096,
-        min_output=64,
-        max_output=128,
-    ),
-    "kv-pressure": dict(
-        desc="KV Cache 过载 — 测试 preemption/swap 策略",
-        num_seqs=256,
-        min_input=1024,
-        max_input=2048,
-        min_output=512,
-        max_output=1024,
-    ),
-    "decode-heavy": dict(
-        desc="长输出主导 — 测试纯 decode 吞吐",
-        num_seqs=128,
-        min_input=64,
-        max_input=256,
-        min_output=1024,
-        max_output=2048,
-    ),
-    "balanced": dict(
-        desc="均衡负载 (原始 bench.py 场景)",
-        num_seqs=256,
-        min_input=100,
-        max_input=1024,
-        min_output=100,
-        max_output=1024,
-    ),
+    "qwen3": {
+        "model": os.path.expanduser("~/huggingface/models/Qwen3-0.6B/"),
+        "num_seqs": 128,
+        "min_in": 100, "max_in": 512,
+        "min_out": 100, "max_out": 512,
+        "max_model_len": 4096,
+        "enforce_eager": False,
+    },
+    "qwen35": {
+        "model": "/data/huggingface/models/Qwen3.5-4B",
+        "num_seqs": 8,
+        "min_in": 100, "max_in": 200,
+        "min_out": 100, "max_out": 200,
+        "max_model_len": 1024,
+        "enforce_eager": False,
+    },
 }
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", choices=list(SCENARIOS), required=True)
-    parser.add_argument("--engine", choices=["nanovllm", "vllm"], required=True)
-    parser.add_argument("--no-cuda-graph", action="store_true", default=False,
-                        help="Disable CUDA graph (enforce eager mode)")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--engine", choices=["nanovllm", "vllm"], required=True)
+    p.add_argument("--scenario", choices=list(SCENARIOS), required=True)
+    args = p.parse_args()
 
     cfg = SCENARIOS[args.scenario]
-    enforce_eager = args.no_cuda_graph
+    model = cfg["model"]
+    if not os.path.isdir(model):
+        print(f"ERROR: model not found: {model}", flush=True)
+        sys.exit(1)
 
     seed(0)
-
     if args.engine == "nanovllm":
+        if "qwen35" in args.scenario:
+            os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
         from nanovllm import LLM, SamplingParams
+        llm = LLM(model, enforce_eager=cfg["enforce_eager"],
+                  max_model_len=cfg["max_model_len"], gpu_memory_utilization=0.85)
     else:
         from vllm import LLM, SamplingParams
+        llm = LLM(model, enforce_eager=False,
+                  max_model_len=cfg["max_model_len"], gpu_memory_utilization=0.85,
+                  disable_log_stats=True)
 
-    path = os.path.expanduser("~/huggingface/models/Qwen3-0.6B/")
-    max_model_len = 8192 if args.engine == "nanovllm" and not enforce_eager else 4096
-    llm = LLM(path, enforce_eager=enforce_eager, max_model_len=max_model_len)
+    # Warmup
+    llm.generate(["Warmup"], SamplingParams(max_tokens=1))
 
-    prompt_token_ids = [
-        [randint(0, 10000) for _ in range(randint(cfg["min_input"], cfg["max_input"]))]
-        for _ in range(cfg["num_seqs"])
-    ]
-    sampling_params = [
-        SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(cfg["min_output"], cfg["max_output"]))
-        for _ in range(cfg["num_seqs"])
-    ]
-    if args.engine == "vllm":
-        prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
+    # Generate random requests
+    prompts, params = [], []
+    for _ in range(cfg["num_seqs"]):
+        ilen = randint(cfg["min_in"], cfg["max_in"])
+        olen = randint(cfg["min_out"], cfg["max_out"])
+        if args.engine == "vllm":
+            prompts.append(dict(prompt_token_ids=[randint(0, 10000) for _ in range(ilen)]))
+        else:
+            prompts.append([randint(0, 10000) for _ in range(ilen)])
+        params.append(SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=olen))
 
-    warmup_sp = SamplingParams()
-    if args.engine == "vllm":
-        warmup_sp = SamplingParams(max_tokens=1)
-    llm.generate(["Warmup"], warmup_sp)
+    t0 = time.time()
+    llm.generate(prompts, params, use_tqdm=False)
+    elapsed = time.time() - t0
 
-    t = time.time()
-    llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
-    t = time.time() - t
-    total_tokens = sum(sp.max_tokens for sp in sampling_params)
-    throughput = total_tokens / t
-    # Output format: SCENARIO ENGINE TOTAL_TOKENS TIME THROUGHPUT
-    print(f"RESULT {args.scenario} {args.engine} {total_tokens} {t:.2f} {throughput:.2f}",
-          flush=True)
+    total_out = sum(p.max_tokens for p in params)
+    tp = total_out / elapsed
+    print(f"RESULT {args.scenario} {args.engine} {total_out} {elapsed:.2f} {tp:.0f}")
 
 
 if __name__ == "__main__":
