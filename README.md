@@ -8,6 +8,7 @@ Supported model families: `Qwen2` (including `Qwen2.5`), `Qwen3`, and `Qwen3.5`.
 
 - **Fast offline inference** — Competitive with vLLM across Qwen3 and Qwen3.5
 - **Native hybrid-attention** — Hand-written GatedDeltaNet for Qwen3.5, no HuggingFace model dependency
+- **Async streaming API** — `AsyncLLM` with `generate()` async generator, supports concurrent requests and abort
 - **CUDA graph** — Zero-overhead kernel replay for decode
 - **Paged KV cache** — Efficient memory management with prefix caching
 - **Readable codebase** — ~1,500 lines of Python
@@ -32,6 +33,8 @@ huggingface-cli download --resume-download Qwen/Qwen3.5-0.8B \
 
 ## Quick Start
 
+### Synchronous
+
 ```python
 from nanovllm import LLM, SamplingParams
 
@@ -40,6 +43,27 @@ sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
 outputs = llm.generate(["Hello, my name is"], sampling_params)
 print(outputs[0]["text"])
 ```
+
+### Async streaming
+
+```python
+import asyncio
+from nanovllm import AsyncLLM, SamplingParams
+
+async def main():
+    llm = AsyncLLM("~/huggingface/Qwen3-0.6B")
+    async for out in llm.generate(
+        "Hello, my name is",
+        SamplingParams(max_tokens=50),
+        request_id="req-1",
+    ):
+        text = llm.tokenizer.decode(out.outputs[0].token_ids)
+        print(text, end="", flush=True)
+
+asyncio.run(main())
+```
+
+Supports concurrent requests, abort, and per-token streaming. Run `pytest tests/test_async.py` to verify.
 
 For Qwen3.5, set `TORCH_COMPILE_DISABLE=1` to avoid PyTorch recompilation overhead with variable-length inputs:
 
