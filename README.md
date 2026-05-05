@@ -30,11 +30,14 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 huggingface-cli download --resume-download Qwen/Qwen3.5-0.8B \
   --local-dir ~/huggingface/Qwen3.5-0.8B/ \
   --local-dir-use-symlinks False
+```
 
-# Quantized models (W4A16-G128, FP8 rtn)
-huggingface-cli download --resume-download Qwen/Qwen3-8B \
-  --local-dir ~/huggingface/Qwen3-8B-W4A16-G128/ \
-  --local-dir-use-symlinks False
+Quantized models can be produced from FP16 checkpoints using [llm-compressor](https://github.com/vllm-project/llm-compressor):
+
+```bash
+llm-compressor compress --model ~/huggingface/Qwen3-8B \
+  --scheme w4a16_g128 \
+  --output ~/huggingface/Qwen3-8B-W4A16-G128
 ```
 
 ## Quick Start
@@ -106,7 +109,7 @@ W4A16-G128 uses ~5 GB vs ~16 GB for FP16 — 3x memory reduction with negligible
 
 ## Quantization
 
-big-VLLM supports `compressed-tensors` quantized models with automatic dequantization during weight loading. No special flags needed — just pass the model path:
+big-VLLM supports [llm-compressor](https://github.com/vllm-project/llm-compressor) quantized models (`compressed-tensors` format) with automatic dequantization during weight loading. No special flags needed — just pass the model path:
 
 ```python
 llm = LLM("~/huggingface/Qwen3-8B-W4A16-G128", enforce_eager=False)
