@@ -244,7 +244,11 @@ class ModelRunner:
         reset_context()
 
         # If this model uses GDNStateCache, recapture graph after prefill with real state
-        if is_prefill and not self._graph_captured and not self.enforce_eager:
+        has_gdn = False
+        m = self.model
+        if hasattr(m, "model") and hasattr(m.model, "language_model"):
+            has_gdn = hasattr(m.model.language_model, "_state_cache")
+        if is_prefill and not self._graph_captured and not self.enforce_eager and has_gdn:
             saved = self._save_gdn_state()
             old_device = torch.get_default_device()
             torch.set_default_device('cuda')
