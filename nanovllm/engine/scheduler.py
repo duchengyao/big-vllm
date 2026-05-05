@@ -12,7 +12,11 @@ class Scheduler:
         self.max_num_batched_tokens = config.max_num_batched_tokens
         self.eos = config.eos
         self.block_size = config.kvcache_block_size
-        self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
+        if config.num_kvcache_blocks <= 0:
+            from nanovllm.engine.block_manager import BypassBlockManager
+            self.block_manager = BypassBlockManager(config.kvcache_block_size)
+        else:
+            self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
 
@@ -27,6 +31,7 @@ class Scheduler:
         num_batched_tokens = 0
 
         # prefill
+        tries = 0
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
             remaining = self.max_num_batched_tokens - num_batched_tokens
@@ -35,7 +40,13 @@ class Scheduler:
             if not seq.block_table:
                 num_cached_blocks = self.block_manager.can_allocate(seq)
                 if num_cached_blocks == -1:
-                    break
+                    if scheduled_seqs:
+                        break
+                    tries += 1
+                    if tries >= len(self.waiting):
+                        break
+                    self.waiting.rotate(-1)
+                    continue
                 num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
             else:
                 num_tokens = seq.num_tokens - seq.num_cached_tokens
@@ -68,7 +79,8 @@ class Scheduler:
                 seq.is_prefill = False
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
-        assert scheduled_seqs
+        if not scheduled_seqs:
+            return scheduled_seqs, False
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 

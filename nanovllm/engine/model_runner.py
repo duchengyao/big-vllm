@@ -6,7 +6,7 @@ from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
-from nanovllm.models.qwen3 import Qwen3ForCausalLM
+from nanovllm.models import get_model_cls
 from nanovllm.layers.sampler import Sampler
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
@@ -14,9 +14,13 @@ from nanovllm.utils.loader import load_model
 
 class ModelRunner:
 
+    _graph_captured = False
+
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
         self.config = config
         hf_config = config.hf_config
+        text_config = getattr(config, "text_config", hf_config)
+        self.text_config = text_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
         self.world_size = config.tensor_parallel_size
@@ -26,9 +30,10 @@ class ModelRunner:
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(hf_config.dtype)
+        torch.set_default_dtype(text_config.dtype)
         torch.set_default_device("cuda")
-        self.model = Qwen3ForCausalLM(hf_config)
+        model_cls = get_model_cls(hf_config)
+        self.model = model_cls(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
@@ -93,32 +98,46 @@ class ModelRunner:
         torch.cuda.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
         seq_len = min(max_num_batched_tokens, max_model_len)
-        num_seqs = min(max_num_batched_tokens // seq_len, self.config.max_num_seqs)
+        num_seqs = 1
         seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
         for seq in seqs:
             seq.num_scheduled_tokens = seq_len
         self.run(seqs, True)
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        if hasattr(self.model, "model") and hasattr(self.model.model, "language_model"):
+            if hasattr(self.model.model.language_model, "reset_cache"):
+                self.model.model.language_model.reset_cache()
 
     def allocate_kv_cache(self):
         config = self.config
         hf_config = config.hf_config
+        text_config = self.text_config
         free, total = torch.cuda.mem_get_info()
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
+        num_kv_heads = text_config.num_key_value_heads // self.world_size
+        head_dim = getattr(text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads)
+        block_bytes = 2 * text_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * text_config.dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
-        assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
-        layer_id = 0
+
+        has_kv_module = False
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
-                module.k_cache = self.kv_cache[0, layer_id]
-                module.v_cache = self.kv_cache[1, layer_id]
-                layer_id += 1
+                has_kv_module = True
+                break
+
+        if has_kv_module and config.num_kvcache_blocks > 0:
+            self.kv_cache = torch.empty(2, text_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+            layer_id = 0
+            for module in self.model.modules():
+                if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
+                    module.k_cache = self.kv_cache[0, layer_id]
+                    module.v_cache = self.kv_cache[1, layer_id]
+                    layer_id += 1
+        else:
+            config.num_kvcache_blocks = 0
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
@@ -212,12 +231,55 @@ class ModelRunner:
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
+        if is_prefill:
+            m = self.model
+            if hasattr(m, "model") and hasattr(m.model, "language_model"):
+                lm = m.model.language_model
+                if hasattr(lm, "reset_cache"):
+                    lm.reset_cache()
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
         logits = self.run_model(input_ids, positions, is_prefill)
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
+
+        # If this model uses GDNStateCache, recapture graph after prefill with real state
+        has_gdn = False
+        m = self.model
+        if hasattr(m, "model") and hasattr(m.model, "language_model"):
+            has_gdn = hasattr(m.model.language_model, "_state_cache")
+        if is_prefill and not self._graph_captured and not self.enforce_eager and has_gdn:
+            saved = self._save_gdn_state()
+            old_device = torch.get_default_device()
+            torch.set_default_device('cuda')
+            torch.set_default_dtype(self.text_config.dtype)
+            try:
+                self.capture_cudagraph()
+                self._graph_captured = True
+            except Exception:
+                self._graph_captured = False
+            torch.set_default_device(old_device)
+            self._restore_gdn_state(saved)
+
         return token_ids
+
+    def _save_gdn_state(self):
+        m = self.model
+        if hasattr(m, "model") and hasattr(m.model, "language_model"):
+            cache = getattr(m.model.language_model, "_state_cache", None)
+            if cache is not None:
+                return cache._conv.clone(), cache._rec.clone()
+        return None
+
+    def _restore_gdn_state(self, saved):
+        if saved is None:
+            return
+        m = self.model
+        if hasattr(m, "model") and hasattr(m.model, "language_model"):
+            cache = getattr(m.model.language_model, "_state_cache", None)
+            if cache is not None:
+                cache._conv.copy_(saved[0])
+                cache._rec.copy_(saved[1])
 
     @torch.inference_mode()
     def capture_cudagraph(self):
@@ -230,7 +292,7 @@ class ModelRunner:
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
-        outputs = torch.zeros(max_bs, hf_config.hidden_size)
+        outputs = torch.zeros(max_bs, self.text_config.hidden_size)
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
         self.graph_pool = None

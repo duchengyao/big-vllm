@@ -35,8 +35,9 @@ class LLMEngine:
         atexit.register(self.exit)
 
     def exit(self):
-        self.model_runner.call("exit")
-        del self.model_runner
+        if hasattr(self, "model_runner"):
+            self.model_runner.call("exit")
+            del self.model_runner
         for p in self.ps:
             p.join()
 
@@ -48,6 +49,8 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        if not seqs:
+            return [], 0
         num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids, is_prefill)

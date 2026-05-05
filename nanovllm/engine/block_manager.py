@@ -118,3 +118,39 @@ class BlockManager:
             h = self.compute_hash(token_ids, h)
             block.update(h, token_ids)
             self.hash_to_block_id[h] = block.block_id
+
+
+class BypassBlockManager:
+
+    def __init__(self, block_size: int):
+        self.block_size = block_size
+        self._counter = 0
+
+    def can_allocate(self, seq) -> int:
+        return 0  # No prefix caching
+
+    def allocate(self, seq, num_cached_blocks: int):
+        assert not seq.block_table
+        num_new = seq.num_blocks - num_cached_blocks
+        for _ in range(num_cached_blocks):
+            seq.block_table.append(self._counter)
+            self._counter += 1
+        for _ in range(num_new):
+            seq.block_table.append(self._counter)
+            self._counter += 1
+        seq.num_cached_tokens = num_cached_blocks * self.block_size
+
+    def deallocate(self, seq):
+        seq.num_cached_tokens = 0
+        seq.block_table.clear()
+
+    def can_append(self, seq) -> bool:
+        return True
+
+    def may_append(self, seq):
+        if len(seq) % self.block_size == 1:
+            seq.block_table.append(self._counter)
+            self._counter += 1
+
+    def hash_blocks(self, seq):
+        pass
