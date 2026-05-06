@@ -220,11 +220,11 @@ class GDNStateCache:
         return self._rec[layer_idx:layer_idx+1]
 
     def update_conv(self, state, layer_idx):
-        self._conv[layer_idx] = state.squeeze(0)
+        self._conv[layer_idx].copy_(state.squeeze(0))
         self._has[layer_idx] = True
 
     def update_rec(self, state, layer_idx):
-        self._rec[layer_idx] = state.squeeze(0)
+        self._rec[layer_idx].copy_(state.squeeze(0))
         self._has[layer_idx] = True
 
     def reset(self):

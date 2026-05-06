@@ -38,7 +38,12 @@ class ModelRunner:
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
-        if not self.enforce_eager:
+        # Standard models capture graph at init. GDN models (Qwen3.5) capture after
+        # first real prefill to include correct recurrent state.
+        has_gdn = False
+        if hasattr(self.model, "model") and hasattr(self.model.model, "language_model"):
+            has_gdn = hasattr(self.model.model.language_model, "_state_cache")
+        if not self.enforce_eager and not has_gdn:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
@@ -102,7 +107,12 @@ class ModelRunner:
         seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
         for seq in seqs:
             seq.num_scheduled_tokens = seq_len
+        # Prevent warmup from capturing graph with zero GDN state.
+        # Save/restore flag so real prefill recaptures with correct state.
+        prev = self._graph_captured
+        self._graph_captured = True
         self.run(seqs, True)
+        self._graph_captured = prev
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         if hasattr(self.model, "model") and hasattr(self.model.model, "language_model"):
