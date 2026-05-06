@@ -1,5 +1,7 @@
 # Big-vLLM
 
+> 中文文档: [README_zh.md](README_zh.md)
+
 A high-performance LLM inference engine forked from [nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm), with native support for hybrid-attention models like Qwen3.5.
 
 Supported model families: `Qwen2` (including `Qwen2.5`), `Qwen3`, and `Qwen3.5`.
@@ -129,6 +131,25 @@ The dequantization happens in `load_model()` — packed weights are unpacked, sc
 PyTorch's `torch.compile` (`@torch.compile` decorator) is used on several nano-vLLM kernels (RoPE, RMSNorm, Attention). Under variable batch sizes — especially in Qwen3.5 where prefill can be hundreds of tokens and decode is a single token — the compiler hits `recompile_limit` and recompiles the same functions repeatedly. This adds more overhead than eager execution, causing a net slowdown.
 
 Disabling `torch.compile` avoids this recompilation thrash and results in faster inference for Qwen3.5.
+
+## Tests
+
+```bash
+# Quick regression (core models, ~2 min)
+bash tests/regression.sh --quick
+
+# Full regression (includes 4B models, ~5 min)
+bash tests/regression.sh
+
+# Unit tests
+python -m pytest tests/test_async.py tests/test_quant.py -v
+```
+
+## Development
+
+- Always branch from `main`, never commit directly
+- Run `bash tests/regression.sh --quick` before pushing
+- Compare with upstream: `git diff upstream..main`
 
 ## Acknowledgments
 
