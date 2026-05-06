@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 
 class Qwen35ForCausalLM(nn.Module):
-    """Full HuggingFace Qwen3.5 model with DynamicCache, transparent to engine."""
     packed_modules_mapping = {}
 
     def __init__(self, hf_config):
@@ -13,24 +12,16 @@ class Qwen35ForCausalLM(nn.Module):
             hf_config = hf_config.text_config
 
         from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
-        from transformers.models.qwen3_5.modeling_qwen3_5 import (
-            Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding,
-        )
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
         hf_cfg = Qwen3_5TextConfig(**hf_config.to_dict())
         self._hf_config = hf_cfg
         self.model = nn.Module()
         self.model.language_model = Qwen3_5TextModel(hf_cfg)
         self.model.language_model.reset_cache = self.reset_cache
         self._past_key_values = None
-        self._allocated = False
 
     def reset_cache(self):
         self._past_key_values = None
-
-    def _ensure_rotary(self, device, dtype):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
-        rotary = Qwen3_5TextRotaryEmbedding(self._hf_config)
-        return rotary
 
     def forward(self, input_ids, positions):
         from nanovllm.utils.context import get_context
@@ -82,6 +73,3 @@ class Qwen35ForCausalLM(nn.Module):
             hidden_states = hidden_states[last_indices].contiguous()
         weight = self.model.language_model.embed_tokens.weight
         return F.linear(hidden_states, weight)
-
-    def _allocate_cache(self):
-        pass
