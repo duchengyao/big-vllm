@@ -8,13 +8,24 @@ Supported model families: `Qwen2` (including `Qwen2.5`), `Qwen3`, and `Qwen3.5`.
 
 ## Key Features
 
-- **Fast offline inference** — Competitive with vLLM across Qwen3 and Qwen3.5
+- **Fast offline inference** — Qwen3 graph mode matches or beats vLLM; native Qwen3.5 GatedDeltaNet
 - **Native hybrid-attention** — Hand-written GatedDeltaNet for Qwen3.5, no HuggingFace model dependency
-- **Async streaming API** — `AsyncLLM` with `generate()` async generator, supports concurrent requests and abort
-- **CUDA graph** — Zero-overhead kernel replay for decode
-- **Paged KV cache** — Efficient memory management with prefix caching
-- **Quantized models** — Supports FP8 (rtn) and 4-bit W4A16-G128 via `compressed-tensors` format, with automatic dequantization on load
+- **Async streaming API** — `AsyncLLM` with async generator, concurrent requests, and abort
+- **CUDA graph** — Zero-overhead kernel replay for decode, including GDN state management
+- **Quantized models** — Supports FP8 (rtn) and 4-bit W4A16-G128 via `compressed-tensors` format, auto-dequant on load
 - **Readable codebase** — ~1,500 lines of Python
+
+## Features Checklist
+
+- [x] Native Qwen3.5 GatedDeltaNet support (`qwen35.py`)
+- [x] CUDA Graph for GDN models (state save/restore, skip warmup capture)
+- [x] W4A16-G128 / FP8 (rtn) quantization (`compressed-tensors` format)
+- [x] Async streaming API (`AsyncLLM.generate()`, concurrent + abort)
+- [x] GDN kernel optimizations (gate fusion into Triton, GVA native handling, RMSNorm refactor)
+- [x] Regression tests (12 model × mode combos) + unit tests
+- [x] Benchmark system (`benchmarks/bench_all.sh`)
+- [x] Chinese + English bilingual docs
+- [x] Synced with upstream nano-vllm (forked from `bb823b3`)
 
 ## Installation
 
@@ -84,53 +95,68 @@ TORCH_COMPILE_DISABLE=1 python your_script.py
 
 ## Benchmark
 
-See `benchmarks/run_bench.sh`. Hardware: NVIDIA RTX 3090 (24GB).
+Test environment: NVIDIA GeForce RTX 3090 (24G). Full script: `bash benchmarks/bench_all.sh`.
 
-### Qwen3-0.6B (128 seqs, 100-512 in, 100-512 out)
+### Qwen3-0.6B (128 seqs, in 100-512, out 100-512)
 
-| Engine | Throughput |
-|--------|-----------|
-| big-vLLM | **6,515 tok/s** |
-| vLLM | 6,347 tok/s |
+| Mode | big-VLLM | vLLM | vs |
+|------|----------|------|-----|
+| graph | 6,337 tok/s | 6,268 tok/s | **101%** |
+| eager | 2,472 tok/s | 3,352 tok/s | 74% |
 
-### Qwen3.5-0.8B (8 seqs, 100-200 in, 100-200 out)
+### Qwen3.5-0.8B (8 seqs, in 100-200, out 100-200)
 
-| Engine | Throughput |
-|--------|-----------|
-| vLLM | 1,789 tok/s |
-| big-vLLM | 1,018 tok/s |
+| Mode | big-VLLM | vLLM | vs |
+|------|----------|------|-----|
+| graph | 986 tok/s | 1,784 tok/s | 55% |
+| eager | 122 tok/s | 215 tok/s | 57% |
+| W4A16 eager | 117 tok/s | N/A | - |
 
-### Qwen3-8B (4 seqs, 50-100 in, 50-100 out)
+### Qwen3.5-4B (4 seqs, in 100-200, out 100-200)
 
-| Model | big-VLLM | vLLM |
-|-------|----------|------|
-| FP16 | 75 tok/s | 77 tok/s |
-| W4A16-G128 | 75 tok/s | 88 tok/s |
+| Mode | big-VLLM | vLLM | vs |
+|------|----------|------|-----|
+| graph | 187 tok/s | 243 tok/s | 77% |
+| eager | 45 tok/s | 83 tok/s | 54% |
 
-W4A16-G128 uses ~5 GB vs ~16 GB for FP16 — 3x memory reduction with negligible quality loss.
+> vLLM cannot load Qwen3.5 W4A16 models (missing `preprocessor_config.json` + multimodal config compatibility issue).
 
 ## Quantization
 
-big-VLLM supports [llm-compressor](https://github.com/vllm-project/llm-compressor) quantized models (`compressed-tensors` format) with automatic dequantization during weight loading. No special flags needed — just pass the model path:
+big-VLLM supports [llm-compressor](https://github.com/vllm-project/llm-compressor) quantized models (`compressed-tensors` format) with automatic dequantization on load:
 
 ```python
 llm = LLM("~/huggingface/Qwen3-8B-W4A16-G128", enforce_eager=False)
 ```
 
-Supported formats:
-
-| Format | Bit-width | Example | Dequant |
+| Format | Bit-width | Storage | Dequant |
 |--------|-----------|---------|---------|
-| W4A16-G128 | 4-bit weights, group 128 | `weight_packed` + `weight_scale` | `u4 → s4 → scale` |
-| FP8 (rtn) | 8-bit float, block [128,128] | `float8_e4m3fn` + `weight_scale` | `fp8 → scale` |
+| W4A16-G128 | 4-bit weights, group 128 | `weight_packed` + `weight_scale` | `int32 → u4 → s4 → float × scale` |
+| FP8 (rtn) | 8-bit float | `float8_e4m3fn` + `weight_scale` | `fp8 → bf16 × scale` |
 
-The dequantization happens in `load_model()` — packed weights are unpacked, scaled, and converted to float16 before copying into model parameters. Output quality is near-identical to FP16 (cos similarity > 0.99). Run `python tests/test_quant.py` to verify.
+Dequantization happens in `load_model()`. Qwen3.5 0.8B W4A16 prefill cosine similarity > 0.998, output quality near FP16. Run `python tests/test_quant.py` to verify.
 
 ## Why TORCH_COMPILE_DISABLE?
 
-PyTorch's `torch.compile` (`@torch.compile` decorator) is used on several nano-vLLM kernels (RoPE, RMSNorm, Attention). Under variable batch sizes — especially in Qwen3.5 where prefill can be hundreds of tokens and decode is a single token — the compiler hits `recompile_limit` and recompiles the same functions repeatedly. This adds more overhead than eager execution, causing a net slowdown.
+Qwen3.5 prefill sequences vary widely in length (hundreds of tokens) while decode is fixed at 1 token. PyTorch's `@torch.compile` recompiles on new shapes, hitting `recompile_limit` and causing more overhead than eager execution. Disabling compile avoids this thrashing.
 
-Disabling `torch.compile` avoids this recompilation thrash and results in faster inference for Qwen3.5.
+## CUDA Graph & GDN State Management
+
+Qwen3.5's GatedDeltaNet has per-layer recurrent states (conv_state, recurrent_state). big-VLLM handles this by:
+
+1. **Skip init capture** — GDN models don't capture graph at init
+2. **Skip warmup recapture** — Warmup phase temporarily avoids capture
+3. **Capture after prefill** — Real prefill initializes state, then graph is captured; replay saves/restores state
+
+## TODO / Known Issues
+
+- [ ] Qwen3.5 ~2× slower than vLLM (no full Triton fusion kernel for GDN, uses B-FLA per-op calls)
+- [ ] Qwen3.5 eager slower than vLLM eager (`torch.compile` blanket-disabled, missing selective enable)
+- [ ] Qwen3.5 W4A16 4B decode degradation (GDN recurrent structure quantization error accumulation, no community fix yet)
+- [ ] Multi-seq batch GDN state conflict (Qwen3.5 serialized scheduling, throughput doesn't scale with concurrency)
+- [ ] No tensor parallelism (`assert tp_size == 1` in qwen35.py)
+- [ ] vLLM cannot load Qwen3.5 W4A16 models (needs preprocessor_config files)
+- [ ] No Qwen3.5 4B FP8 model yet
 
 ## Tests
 
@@ -142,7 +168,10 @@ bash tests/regression.sh --quick
 bash tests/regression.sh
 
 # Unit tests
-python -m pytest tests/test_async.py tests/test_quant.py -v
+python -m pytest tests/test_qwen35.py tests/test_async.py -v
+
+# Quantization test
+python tests/test_quant.py
 ```
 
 ## Development
