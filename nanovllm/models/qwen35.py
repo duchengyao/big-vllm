@@ -14,20 +14,28 @@ class Qwen35RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.zeros(hidden_size))
 
+    @torch.compile
+    def _norm(self, x):
+        orig_dtype = x.dtype
+        x = x.float()
+        var = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(var + self.eps)
+        return (x * (1.0 + self.weight.float())).to(orig_dtype)
+
+    @torch.compile
+    def _norm_add(self, x, residual):
+        orig_dtype = x.dtype
+        x = x.float().add_(residual.float())
+        residual = x.to(orig_dtype)
+        var = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(var + self.eps)
+        return (x * (1.0 + self.weight.float())).to(orig_dtype), residual
+
     def forward(self, x: torch.Tensor, residual: torch.Tensor | None = None):
         if residual is None:
-            orig_dtype = x.dtype
-            x = x.float()
-            var = x.pow(2).mean(dim=-1, keepdim=True)
-            x = x * torch.rsqrt(var + self.eps)
-            return (x * (1.0 + self.weight.float())).to(orig_dtype)
+            return self._norm(x)
         else:
-            orig_dtype = x.dtype
-            x = x.float().add_(residual.float())
-            residual = x.to(orig_dtype)
-            var = x.pow(2).mean(dim=-1, keepdim=True)
-            x = x * torch.rsqrt(var + self.eps)
-            return (x * (1.0 + self.weight.float())).to(orig_dtype), residual
+            return self._norm_add(x, residual)
 
 
 class Qwen35Attention(nn.Module):
@@ -162,20 +170,20 @@ class NativeGatedDeltaNet(nn.Module):
         value = value.view(batch, seq_len, -1, self.head_v_dim)
 
         beta = b.sigmoid()
-        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
-        if self.num_v_heads // self.num_k_heads > 1:
-            query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
-            key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
 
         if has_state and seq_len == 1:
-            out, last = self.recurrent_delta(query, key, value, g=g, beta=beta,
+            out, last = self.recurrent_delta(query, key, value, g=a, beta=beta,
                                              initial_state=rec_state, output_final_state=cache is not None,
-                                             use_qk_l2norm_in_kernel=True)
+                                             use_qk_l2norm_in_kernel=True,
+                                             use_gate_in_kernel=True,
+                                             A_log=self.A_log, dt_bias=self.dt_bias)
         else:
             init = rec_state if has_state else None
-            out, last = self.chunk_delta(query, key, value, g=g, beta=beta,
+            out, last = self.chunk_delta(query, key, value, g=a, beta=beta,
                                          initial_state=init, output_final_state=cache is not None,
-                                         use_qk_l2norm_in_kernel=True)
+                                         use_qk_l2norm_in_kernel=True,
+                                         use_gate_in_kernel=True,
+                                         A_log=self.A_log, dt_bias=self.dt_bias)
 
         if cache is not None and last is not None:
             cache.update_rec(last, self.layer_idx)
@@ -193,12 +201,16 @@ class RMSNormGated(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward(self, x):
+    @torch.compile
+    def _norm(self, x):
         orig_dtype = x.dtype
         x = x.float()
         var = x.pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(var + self.eps)
         return (x * self.weight.float()).to(orig_dtype)
+
+    def forward(self, x):
+        return self._norm(x)
 
 
 class GDNStateCache:
