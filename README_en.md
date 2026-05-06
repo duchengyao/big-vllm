@@ -174,12 +174,6 @@ python -m pytest tests/test_qwen35.py tests/test_async.py -v
 python tests/test_quant.py
 ```
 
-## Development
-
-- Always branch from `main`, never commit directly
-- Run `bash tests/regression.sh --quick` before pushing
-- Compare with upstream: `git diff upstream..main`
-
 ## Acknowledgments
 
 Forked from [nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm) by Xingkai Yu. Built with [flash-attn](https://github.com/Dao-AILab/flash-attention), [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d), and [flash-linear-attention](https://github.com/fla-org/flash-linear-attention).
