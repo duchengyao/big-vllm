@@ -174,12 +174,6 @@ python -m pytest tests/test_qwen35.py tests/test_async.py -v
 python tests/test_quant.py
 ```
 
-## 开发规范
-
-- 不要在 `main` 分支直接改代码，所有修改从 `main` 新建分支
-- 改完跑 `bash tests/regression.sh --quick` 验证无回归
-- 对比上游：`git diff upstream..main`
-
 ## 致谢
 
 Fork 自 Xingkai Yu 的 [nano-vLLM](https://github.com/GeeeekExplorer/nano-vllm)。基于 [flash-attn](https://github.com/Dao-AILab/flash-attention)、[causal-conv1d](https://github.com/Dao-AILab/causal-conv1d) 和 [flash-linear-attention](https://github.com/fla-org/flash-linear-attention) 构建。
