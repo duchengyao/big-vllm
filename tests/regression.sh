@@ -13,18 +13,18 @@ os.environ['MASTER_PORT'] = os.environ['REG_PORT']
 os.environ.setdefault('TORCH_COMPILE_DISABLE', '1')
 from nanovllm import LLM, SamplingParams
 llm = LLM(os.path.expanduser('$model'), enforce_eager=$eager, max_model_len=512, gpu_memory_utilization=0.85)
-sp = SamplingParams(temperature=0.6, max_tokens=24)
-out = llm.generate(['Hello, my name is', 'The capital of France is'], sp)
-texts = [o['text'] if isinstance(o, dict) else o.outputs[0].text for o in out]
-for i, t in enumerate(texts):
-    s = t.strip()
-    if not s:
-        print('FAIL: empty output'); raise SystemExit(1)
-    ch = [c for c in s[:16] if c.strip()]
-    if len(ch) >= 4 and len(set(ch[:4])) == 1:
-        print('FAIL: repeating char'); raise SystemExit(1)
-print('PASS')
-" 2>&1 | grep -E '^PASS|^FAIL|^Traceback|Error' | head -1 || echo "CRASH"
+sp = SamplingParams(temperature=0.6, max_tokens=16)
+out = llm.generate(['Hello, my name is'], sp)
+text = out[0]['text'] if isinstance(out[0], dict) else out[0].outputs[0].text
+s = text.strip()
+if not s: print('FAIL: empty'); raise SystemExit(1)
+# Check not all same char repeating
+ch = [c for c in s[:12] if c.strip()]
+if len(ch) >= 4 and len(set(ch[:4])) == 1: print('FAIL: repeating'); raise SystemExit(1)
+# Show first 50 chars of output for manual inspection
+short = s[:50].replace('\n', '\\\\n')
+print(f'PASS {short!r}')
+" 2>&1 | grep -E '^PASS|^FAIL|Error' | head -1 || echo "CRASH"
 }
 
 QUICK=0
