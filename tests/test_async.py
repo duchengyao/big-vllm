@@ -1,6 +1,5 @@
 import asyncio
 import os
-import time
 
 import pytest
 
@@ -83,3 +82,18 @@ async def test_request_output_dataclass(llm):
         if out.finished:
             assert out.outputs[0].finish_reason is not None
             break
+
+
+@pytest.mark.asyncio
+async def test_token_ids_streaming(llm):
+    token_counts = []
+    async for out in llm.generate(
+        [1, 2, 3],
+        SamplingParams(max_tokens=8),
+        request_id="test-tokens",
+    ):
+        token_counts.append(len(out.outputs[0].token_ids))
+        if out.finished:
+            break
+    assert token_counts[0] >= 1
+    assert token_counts[-1] == 8

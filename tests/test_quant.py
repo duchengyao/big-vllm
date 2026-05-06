@@ -3,16 +3,17 @@
 import os, subprocess, sys
 
 TESTS = [
-    ("test_original", "~/huggingface/Qwen3-8B"),
-    ("test_rtn", "~/huggingface/Qwen3-8B-rtn"),
-    ("test_g128", "~/huggingface/Qwen3-8B-W4A16-G128"),
+    ("qwen3-8B-original", "~/huggingface/Qwen3-8B"),
+    ("qwen3-8B-rtn", "~/huggingface/Qwen3-8B-rtn"),
+    ("qwen3-8B-W4A16", "~/huggingface/Qwen3-8B-W4A16-G128"),
+    ("qwen35-0.8B-W4A16", "~/huggingface/Qwen3.5-0.8B-W4A16-G128"),
 ]
 
 PYTHON = sys.executable
-code = """
-import os, torch, sys
+code = r"""
+import os, torch, sys, glob
 os.environ.setdefault("MASTER_ADDR", "localhost")
-os.environ["MASTER_PORT"] = "29601"
+os.environ["MASTER_PORT"] = "29602"
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 import torch.distributed as dist
 dist.init_process_group("nccl", world_size=1, rank=0)
@@ -44,17 +45,55 @@ tok = logits.argmax().item()
 from transformers import AutoTokenizer
 t = AutoTokenizer.from_pretrained(path)
 text = t.decode([tok])
-assert 0 <= tok < 151936, f"bad token: {tok}"
-assert text.strip(), f"whitespace: {text!r}"
-assert t.decode([logits.topk(3).indices[0].item()]).strip(), "top-1 whitespace"
-print(f"OK tok={tok} text={text[:40]!r}")
+assert 0 <= tok < 248320, f"bad token: {tok}"
+assert text.strip(), f"empty top token: {text!r}"
+
+# Cosine similarity vs FP16 reference (skip for large models to avoid OOM)
+is_8b = "8B" in path or "8b" in path
+is_quantized = "-rtn" in path or "-W4A16" in path
+
+if is_quantized and not is_8b:
+    fp_path = path.replace("-W4A16-G128", "").replace("-rtn", "")
+    if os.path.isdir(fp_path):
+        from transformers import AutoConfig
+        hf_cfg = AutoConfig.from_pretrained(fp_path, trust_remote_code=True)
+        try:
+            hf_cfg._attn_implementation = "flash_attention_2"
+        except Exception:
+            pass
+        import transformers
+        Model = transformers.AutoModelForCausalLM.from_config(hf_cfg, torch_dtype=torch.bfloat16)
+        Model = Model.cuda()
+        from safetensors.torch import load_file as ld
+        state = {}
+        for f in sorted(glob.glob(fp_path + "/*.safetensors")):
+            state.update(ld(f))
+        hs = {}
+        for k, v in state.items():
+            if k.startswith("model.language_model."):
+                hs["model." + k[len("model.language_model."):]] = v.cuda().to(torch.bfloat16)
+            else:
+                hs[k] = v.cuda().to(torch.bfloat16)
+        Model.load_state_dict(hs, strict=False)
+        Model.eval()
+        inp2 = torch.tensor([tokens], device='cuda')
+        with torch.inference_mode():
+            l_ref = Model(inp2).logits[0, -1]
+        cos = torch.nn.functional.cosine_similarity(logits.float(), l_ref.float(), dim=0).item()
+        assert cos > 0.95, f"cosine similarity too low: {cos:.4f}"
+        print(f"OK tok={tok} cos={cos:.4f} text={text[:30]!r}")
+        del Model; torch.cuda.empty_cache()
+    else:
+        print(f"OK tok={tok} text={text[:30]!r} (no fp16 ref)")
+else:
+    print(f"OK tok={tok} text={text[:30]!r}")
 """
 
 for name, model in TESTS:
     path = os.path.expanduser(model)
     print(f"  {name}: ", end="", flush=True)
-    r = subprocess.run([PYTHON, "-c", code, path], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([PYTHON, "-c", code, path], capture_output=True, text=True, timeout=180)
     if r.returncode == 0:
         print(r.stdout.strip())
     else:
-        print(f"FAILED\n{r.stderr[-200:]}")
+        print(f"FAILED\n{r.stderr[-300:]}")
