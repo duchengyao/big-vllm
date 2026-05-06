@@ -33,16 +33,21 @@ QUICK=0
 echo "=== Regression Tests ==="
 echo ""
 
-run_test "qwen3-0.6B (graph)"     "~/huggingface/Qwen3-0.6B"          False 30321
-run_test "qwen3-0.6B (eager)"     "~/huggingface/Qwen3-0.6B"          True  30322
-run_test "qwen35-0.8B (eager)"    "~/huggingface/Qwen3.5-0.8B"        True  30323
-run_test "qwen35-0.8B (graph)"    "~/huggingface/Qwen3.5-0.8B"        False 30324
-run_test "qwen3-8B-W4A16 (eager)" "~/huggingface/Qwen3-8B-W4A16-G128" True  30325
+run_test "qwen3-0.6B (graph)"         "~/huggingface/Qwen3-0.6B"          False 30321
+run_test "qwen3-0.6B (eager)"         "~/huggingface/Qwen3-0.6B"          True  30322
+run_test "qwen35-0.8B (eager)"        "~/huggingface/Qwen3.5-0.8B"        True  30323
+run_test "qwen35-0.8B (graph)"        "~/huggingface/Qwen3.5-0.8B"        False 30324
+run_test "qwen3-8B-W4A16 (eager)"     "~/huggingface/Qwen3-8B-W4A16-G128" True  30325
+run_test "qwen35-0.8B-W4A16 (eager)"  "~/huggingface/Qwen3.5-0.8B-W4A16-G128" True  30329
+run_test "qwen35-0.8B-W4A16 (graph)"  "~/huggingface/Qwen3.5-0.8B-W4A16-G128" False 30330
 
 if [ "$QUICK" = "0" ]; then
-    run_test "qwen35-4B (eager)"  "~/huggingface/Qwen3.5-4B"          True  30326
-    run_test "qwen35-4B (graph)"  "~/huggingface/Qwen3.5-4B"          False 30327
-    run_test "qwen35-0.8B-rtn"    "~/huggingface/Qwen3.5-0.8B-rtn"    True  30328
+    run_test "qwen35-4B (eager)"      "~/huggingface/Qwen3.5-4B"          True  30326
+    run_test "qwen35-4B (graph)"      "~/huggingface/Qwen3.5-4B"          False 30327
+    run_test "qwen35-0.8B-rtn"        "~/huggingface/Qwen3.5-0.8B-rtn"    True  30328
+    run_test "qwen35-0.8B-rtn (graph)" "~/huggingface/Qwen3.5-0.8B-rtn"   False 30331
+    run_test "qwen35-4B-W4A16 (eager)" "~/huggingface/Qwen3.5-4B-W4A16-G128" True  30332
+    run_test "qwen35-4B-W4A16 (graph)" "~/huggingface/Qwen3.5-4B-W4A16-G128" False 30333
 fi
 
 echo ""
